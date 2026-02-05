@@ -1,0 +1,7 @@
+{
+  "name": "2.0 ECK SafetyHub",
+  "description": "Health & Safety training platform for European College of Kosovo. Mobile-first, gamified interactive learning for SME compliance.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
