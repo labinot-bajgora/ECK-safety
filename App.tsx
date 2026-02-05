@@ -19,6 +19,9 @@ const App: React.FC = () => {
   const [completionId, setCompletionId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [prefilledCode, setPrefilledCode] = useState('');
+  
+  const [showManualCodeField, setShowManualCodeField] = useState(false);
+  const [isValidating, setIsValidating] = useState(true);
 
   const stepsOrder = [
     TrainingStep.ENTRY,
@@ -29,17 +32,31 @@ const App: React.FC = () => {
   ];
 
   useEffect(() => {
-    // Check for ?code= in URL for automated onboarding
+    // 1. Resolve Code Priority: URL Path (/c/CODE) > URL Params (?code=) > Local Storage
+    const pathParts = window.location.pathname.split('/');
+    const pathCode = pathParts[1] === 'c' ? pathParts[2] : null;
     const params = new URLSearchParams(window.location.search);
-    const codeParam = params.get('code');
-    if (codeParam) {
-      setPrefilledCode(codeParam.toUpperCase());
-    }
+    const queryCode = params.get('code');
+    
+    const urlCode = (pathCode || queryCode || '').toUpperCase();
 
-    // Restore session if exists
+    // 2. Restore session if exists
     const savedLearner = localStorage.getItem('sh_learner');
     const savedStep = localStorage.getItem('sh_step');
-    if (savedLearner && savedStep && savedStep !== TrainingStep.RESULT) {
+
+    if (urlCode) {
+      const validation = apiService.validateCode(urlCode);
+      if (validation.valid) {
+        setPrefilledCode(urlCode);
+        setActiveCodeInfo(validation.codeInfo!);
+        setActiveCourse(validation.course!);
+        setShowManualCodeField(false);
+      } else {
+        setError(validation.message || "Ky link i trajnimit nuk është aktiv.");
+        setShowManualCodeField(true);
+      }
+      setIsValidating(false);
+    } else if (savedLearner && savedStep && savedStep !== TrainingStep.RESULT) {
       try {
         const parsedLearner = JSON.parse(savedLearner);
         const validation = apiService.validateCode(parsedLearner.accessCode);
@@ -48,10 +65,17 @@ const App: React.FC = () => {
           setCurrentStep(savedStep as TrainingStep);
           setActiveCodeInfo(validation.codeInfo!);
           setActiveCourse(validation.course!);
+          setPrefilledCode(parsedLearner.accessCode);
+          setShowManualCodeField(false);
         }
       } catch (e) {
         console.warn("Session restore failed.");
+        setShowManualCodeField(true);
       }
+      setIsValidating(false);
+    } else {
+      setShowManualCodeField(false); // Hide input by default as per req 3
+      setIsValidating(false);
     }
   }, []);
 
@@ -59,16 +83,25 @@ const App: React.FC = () => {
     e.preventDefault();
     setError(null);
     const formData = new FormData(e.currentTarget);
-    const code = (formData.get('accessCode') as string).trim().toUpperCase();
     
-    if (code === ADMIN_PIN) {
+    // Resolve which code to use: User-typed manual code OR the auto-resolved link code
+    const manualCode = (formData.get('accessCode') as string || '').trim().toUpperCase();
+    const finalCode = (manualCode || prefilledCode).trim().toUpperCase();
+    
+    if (finalCode === ADMIN_PIN) {
       setIsAdmin(true);
       return;
     }
 
-    const validation = apiService.validateCode(code);
+    if (!finalCode) {
+      setError("Ju lutemi shënoni kodin e kompanisë.");
+      setShowManualCodeField(true);
+      return;
+    }
+
+    const validation = apiService.validateCode(finalCode);
     if (!validation.valid) {
-      setError(validation.message || "Qasja u refuzua.");
+      setError(validation.message || "Kodi nuk është i saktë.");
       return;
     }
 
@@ -77,7 +110,7 @@ const App: React.FC = () => {
       lastName: formData.get('lastName') as string,
       companyName: validation.codeInfo!.companyName,
       jobPosition: formData.get('jobPosition') as string,
-      accessCode: code
+      accessCode: finalCode
     };
 
     setLearner(data);
@@ -152,39 +185,77 @@ const App: React.FC = () => {
             <p className="text-slate-500 font-bold uppercase text-[10px] tracking-[0.25em]">Portali i Autorizuar për Siguri</p>
           </div>
           
-          <form onSubmit={handleEntry} className="space-y-6">
-            <div className="bg-white p-6 md:p-8 rounded-[2rem] shadow-sm border border-slate-200 space-y-6">
-              <div className="space-y-2">
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1">Kodi i Qasjes</label>
-                <input required name="accessCode" defaultValue={prefilledCode} autoComplete="off" autoCorrect="off" autoCapitalize="characters" className="w-full px-5 py-5 bg-slate-50 border-2 border-slate-100 rounded-2xl focus:border-blue-900 outline-none font-mono text-xl text-blue-900 transition-all" placeholder="000000" />
-              </div>
-              
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1">Emri</label>
-                  <input required name="firstName" autoComplete="given-name" className="w-full px-5 py-4 bg-slate-50 border-2 border-slate-100 rounded-2xl outline-none focus:border-blue-900 transition-all" placeholder="Emri juaj" />
-                </div>
-                <div className="space-y-2">
-                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1">Mbiemri</label>
-                  <input required name="lastName" autoComplete="family-name" className="w-full px-5 py-4 bg-slate-50 border-2 border-slate-100 rounded-2xl outline-none focus:border-blue-900 transition-all" placeholder="Mbiemri juaj" />
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <div className="flex justify-between items-center px-1">
-                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Pozita e Punës</label>
-                  <span className="text-[9px] font-bold text-slate-300 uppercase tracking-widest">Opsionale</span>
-                </div>
-                <input name="jobPosition" className="w-full px-5 py-4 bg-slate-50 border-2 border-slate-100 rounded-2xl outline-none focus:border-blue-900 transition-all" placeholder="p.sh. Menaxher, Operator" />
-              </div>
+          {isValidating ? (
+            <div className="flex flex-col items-center py-20 space-y-4">
+               <div className="w-10 h-10 border-4 border-blue-900/20 border-t-blue-900 rounded-full animate-spin" />
+               <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Duke verifikuar...</p>
             </div>
+          ) : (
+            <div className="space-y-6">
+              {/* Direct Access Helper Message if no link is present */}
+              {!activeCodeInfo && !showManualCodeField && (
+                <div className="bg-blue-50/50 p-6 rounded-2xl border border-blue-100/50 text-center space-y-4">
+                  <p className="text-sm font-bold text-blue-900 leading-relaxed px-4">
+                    Ju lutemi përdorni linkun e trajnimit të siguruar nga punëdhënësi juaj.
+                  </p>
+                  <button 
+                    type="button" 
+                    onClick={() => setShowManualCodeField(true)} 
+                    className="text-[10px] font-black text-slate-400 uppercase underline tracking-widest hover:text-blue-900 transition-colors"
+                  >
+                    👉 Shënoni kodin manualisht
+                  </button>
+                </div>
+              )}
 
-            {error && <div className="p-5 bg-red-50 text-red-600 rounded-2xl text-xs font-black border border-red-100 animate-in shake">{error}</div>}
-            
-            <button type="submit" className="w-full py-6 bg-blue-900 text-white font-black rounded-2xl shadow-xl shadow-blue-900/20 hover:bg-yellow-400 hover:text-blue-900 transition-all active:scale-[0.98] text-lg">
-              FILLO TRAJNIMIN
-            </button>
-          </form>
+              <form onSubmit={handleEntry} className="space-y-6">
+                <div className="bg-white p-6 md:p-8 rounded-[2rem] shadow-sm border border-slate-200 space-y-6">
+                  
+                  {/* Access Code Field - Hidden unless required or manually toggled */}
+                  {(showManualCodeField) && (
+                    <div className="space-y-2 animate-in slide-in-from-top-2">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1">Kodi i Kompanisë</label>
+                      <input 
+                        required 
+                        name="accessCode" 
+                        defaultValue={prefilledCode} 
+                        autoComplete="off" 
+                        autoCorrect="off" 
+                        autoCapitalize="characters" 
+                        className="w-full px-5 py-5 bg-slate-50 border-2 border-slate-100 rounded-2xl focus:border-blue-900 outline-none font-mono text-xl text-blue-900 transition-all" 
+                        placeholder="Shënoni kodin..." 
+                      />
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1">Emri *</label>
+                      <input required name="firstName" autoComplete="given-name" className="w-full px-5 py-4 bg-slate-50 border-2 border-slate-100 rounded-2xl outline-none focus:border-blue-900 transition-all" placeholder="Emri juaj" />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1">Mbiemri *</label>
+                      <input required name="lastName" autoComplete="family-name" className="w-full px-5 py-4 bg-slate-50 border-2 border-slate-100 rounded-2xl outline-none focus:border-blue-900 transition-all" placeholder="Mbiemri juaj" />
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="flex justify-between items-center px-1">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Pozita e Punës</label>
+                      <span className="text-[9px] font-bold text-slate-300 uppercase tracking-widest">Opsionale</span>
+                    </div>
+                    <input name="jobPosition" className="w-full px-5 py-4 bg-slate-50 border-2 border-slate-100 rounded-2xl outline-none focus:border-blue-900 transition-all" placeholder="p.sh. Menaxher, Operator" />
+                  </div>
+                </div>
+
+                {error && <div className="p-5 bg-red-50 text-red-600 rounded-2xl text-xs font-black border border-red-100 animate-in shake">{error}</div>}
+                
+                <button type="submit" className="w-full py-6 bg-blue-900 text-white font-black rounded-2xl shadow-xl shadow-blue-900/20 hover:bg-yellow-400 hover:text-blue-900 transition-all active:scale-[0.98] text-lg uppercase tracking-tight">
+                  Kliko për të filluar
+                </button>
+              </form>
+            </div>
+          )}
         </div>
       )}
 
